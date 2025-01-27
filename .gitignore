@@ -9,4 +9,20 @@ wheels/
 # Virtual environments
 .venv
 
+# Environment variables
 .env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

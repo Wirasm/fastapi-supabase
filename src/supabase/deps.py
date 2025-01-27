@@ -103,6 +103,19 @@ security = HTTPBearer(
 super_client: Optional[AsyncClient] = None
 
 
+async def close_super_client() -> None:
+    """Close Supabase client during shutdown"""
+    global super_client
+    try:
+        if super_client:
+            await super_client.auth.sign_out()
+            super_client = None
+            logging.info("Supabase client closed successfully")
+    except Exception as e:
+        logging.error(f"Failed to close Supabase client: {e}")
+        raise
+
+
 async def init_super_client() -> None:
     """Initialize Supabase client at lifespan event"""
     global super_client

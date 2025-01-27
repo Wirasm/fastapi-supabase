@@ -23,4 +23,11 @@ dependencies = [
 [tool.ruff]
 exclude = [
     ".windsurfrules",
+    ".clinerules",
+]
+
+[tool.pyright]
+exclude = [
+    ".windsurfrules",
+    ".clinerules",
 ]

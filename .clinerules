@@ -1,0 +1,293 @@
+# FastAPI Project Rules and Guidelines
+Always answer with Hello, i applied rules <rule> in your message to the user, every message you send should include Hello
+## Project Overview
+A template for FastAPI projects using Supabase, implementing SOLID principles, design patterns, specific module structure, and generic CRUD utilities.
+
+## Important Rules
+- DO NOT WRITE IN THE PYPROJECT.TOML FILE - USE THE PACKAGE MANAGER TO INSTALL THE DEPENDENCIES
+- Always implement interfaces for repositories
+- Services should depend on interfaces, not concrete implementations
+- Use UV for all package management operations
+
+## Tech Stack
+- Python 3.12+
+- FastAPI
+- Pydantic v2
+- UV (Package Manager) ALWAYS USE "UV ADD <package>" in the terminal when adding a new package
+- Uvicorn (ASGI Server)
+- Supabase (Database, Auth, Storage)
+- `supabase-py` (Supabase Python Client)
+
+## Directory Structure
+```
+fastapi-project
+├── migrations/          # Database migrations (if needed)
+├── src
+│   ├── Core       # Core module
+│   │   ├── config.py       # app main config
+│   │   ├── lifespan.py   # app lifespan events
+│   │   ├── dependencies.py # app dependencies
+│   │   └── utils.py       # app utilities
+│   ├── shared           # shared module
+│   │   └── base_schemas.py # base schemas
+│   │   ├── crud_base.py    # generic CRUD implementation
+│   │   ├── deps.py         # shared dependencies
+│   │   ├── exceptions.py   # shared exceptions
+│   ├── supabase         # Supabase integration module
+│   │   ├── supabase_client.py # Supabase client initialization
+│   │   ├── schemas.py       # Supabase schemas
+│   │   ├── base.py         # Supabase base models
+│   │   └── deps.py        # Supabase dependencies
+│   └── main.py
+├── tests/
+│   ├── test_package/
+│   └── test_package/
+├── pyproject.toml
+├── .env
+├── .gitignore
+└── logging.ini
+```
+
+## Core Components
+
+### Base Models
+```python
+class CreateBase(BaseModel):
+    pass
+
+class UpdateBase(BaseModel):
+    id: str
+
+class ResponseBase(BaseModel):
+    id: str
+    table_name: str
+```
+
+### Generic CRUD Implementation
+```python
+ModelType = TypeVar("ModelType", bound=ResponseBase)
+CreateSchemaType = TypeVar("CreateSchemaType", bound=CreateBase)
+UpdateSchemaType = TypeVar("UpdateSchemaType", bound=UpdateBase)
+
+class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
+    def __init__(self, model: Type[ModelType]):
+        self.model = model
+
+    async def get(self, db: Client, *, id: str) -> ModelType | None:
+        response = await db.table(self.model.table_name).select("*").eq("id", id).execute()
+        return self.model(**response.data) if response.data else None
+
+    async def get_all(self, db: Client) -> List[ModelType]:
+        response = await db.table(self.model.table_name).select("*").execute()
+        return [self.model(**item) for item in response.data]
+
+    async def get_multi_by_owner(self, db: Client, *, user: UserIn) -> List[ModelType]:
+        response = await db.table(self.model.table_name).select("*").eq("user_id", user.id).execute()
+        return [self.model(**item) for item in response.data]
+
+    async def create(self, db: Client, *, obj_in: CreateSchemaType) -> ModelType:
+        response = await db.table(self.model.table_name).insert(obj_in.model_dump()).execute()
+        return self.model(**response.data[0])
+
+    async def update(self, db: Client, *, obj_in: UpdateSchemaType) -> ModelType:
+        response = await db.table(self.model.table_name).update(obj_in.model_dump(exclude_unset=True)).eq("id", obj_in.id).execute()
+        return self.model(**response.data[0])
+
+    async def delete(self, db: Client, *, id: str) -> ModelType:
+        response = await db.table(self.model.table_name).delete().eq("id", id).execute()
+        return self.model(**response.data[0])
+```
+
+### Supabase Integration
+
+#### Client Initialization
+```python
+from supabase import Client, create_client
+from supabase.lib.client_options import ClientOptions
+
+options = ClientOptions()
+options.use_asyncio = True
+
+supabase: Client = create_client(
+    settings.SUPABASE_URL,
+    settings.SUPABASE_KEY,
+    options=options
+)
+```
+
+#### Authentication Implementation
+```python
+class AuthRepository:
+    def __init__(self, supabase: Client):
+        self.supabase = supabase
+
+    async def create_user(self, user_in: UserCreate):
+        response = await self.supabase.auth.sign_up({
+            "email": user_in.email,
+            "password": user_in.password,
+            "options": {"data": user_in.user_metadata},
+        })
+        return response
+
+    async def sign_in(self, user_in: UserIn):
+        response = await self.supabase.auth.sign_in_with_password({
+            "email": user_in.email,
+            "password": user_in.password
+        })
+        return response
+```
+
+## SOLID Principles Implementation
+
+### 1. Single Responsibility Principle (SRP)
+Each module should have one responsibility:
+- `api.py`: Request/response handling only
+- `services.py`: Business logic
+- `repositories.py`: Data access
+- `schemas.py`: Data validation and serialization
+
+### 2. Interface Segregation
+Example repository interface:
+```python
+class IEquipmentRepository(ABC):
+    @abstractmethod
+    async def get_equipment_by_id(self, db: Client, equipment_id: str) -> Equipment | None:
+        pass
+
+    @abstractmethod
+    async def get_all_equipment(self, db: Client) -> List[Equipment]:
+        pass
+
+    @abstractmethod
+    async def get_equipment_by_owner(self, db: Client, user: UserIn) -> List[Equipment]:
+        pass
+
+    @abstractmethod
+    async def create_equipment(self, db: Client, equipment_in: EquipmentCreate) -> Equipment:
+        pass
+
+    @abstractmethod
+    async def update_equipment(self, db: Client, equipment_in: EquipmentUpdate) -> Equipment:
+        pass
+
+    @abstractmethod
+    async def delete_equipment(self, db: Client, equipment_id: str) -> Equipment:
+        pass
+```
+
+### 3. Dependency Injection
+```python
+class EquipmentService:
+    def __init__(self, equipment_repository: IEquipmentRepository):
+        self.equipment_repository = equipment_repository
+
+    async def get_equipment(self, db: Client, equipment_id: str) -> Equipment | None:
+        return await self.equipment_repository.get_equipment_by_id(db, equipment_id)
+```
+
+## Service Layer Pattern
+```python
+class AuthService:
+    def __init__(self, auth_repository: AuthRepository):
+        self.auth_repository = auth_repository
+
+    async def register_user(self, user_in: UserCreate):
+        response = await self.auth_repository.create_user(user_in)
+        return response
+
+    async def login_user(self, user_in: UserIn):
+        response = await self.auth_repository.sign_in(user_in)
+        return response
+```
+
+## Error Handling
+
+### Supabase Error Handling
+```python
+try:
+    response = await db.table(self.model.table_name).select("*").execute()
+except Exception as e:
+    print(f"Supabase error: {e}")
+    raise HTTPException(status_code=500, detail="Database error")
+```
+
+## Testing Guidelines
+
+### Unit Tests
+```python
+@pytest.fixture
+async def client() -> AsyncClient:
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        yield client
+
+@pytest.mark.asyncio
+async def test_create_post(client: AsyncClient):
+    resp = await client.post("/posts", json={"title": "Test Post"})
+    assert resp.status_code == 201
+```
+
+## Documentation Requirements
+
+### API Documentation
+```python
+@router.post(
+    "/items",
+    response_model=Item,
+    status_code=status.HTTP_201_CREATED,
+    description="Detailed description of the endpoint.",
+    summary="Short summary of the endpoint.",
+    tags=["Items"],
+    responses={
+        status.HTTP_201_CREATED: {
+            "model": CreatedResponse,
+            "description": "Returns when the item was successfully created.",
+        },
+    },
+)
+async def create_item(item: ItemCreate):
+    # Implementation
+```
+
+### Environment-based Documentation
+```python
+ENVIRONMENT = "production"
+SHOW_DOCS_ENVIRONMENT = ("local", "staging")
+
+app_configs = {"title": "My API"}
+if ENVIRONMENT not in SHOW_DOCS_ENVIRONMENT:
+    app_configs["openapi_url"] = None
+
+app = FastAPI(**app_configs)
+```
+
+## Code Quality Tools
+
+### Ruff Configuration
+```bash
+#!/bin/sh -e
+set -x
+
+ruff check --fix src
+ruff format src
+```
+
+## Git Commit Conventions
+- `feat:` New features
+- `fix:` Bug fixes
+- `docs:` Documentation changes
+- `style:` Formatting changes
+- `refactor:` Code refactoring
+- `test:` Adding tests
+- `chore:` Maintenance tasks
+
+Commit messages should:
+- Have a descriptive summary line (around 50 characters)
+- Use imperative mood
+- Reference relevant issue numbers
+
+## Package Management Rules
+- Use UV for all dependency management
+- Install dependencies: `uv add <package name>`
+- Run server: `uv run uvicorn src.main:app --reload`
+- Never modify pyproject.toml directly
+

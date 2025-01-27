@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from supabase._async.client import AsyncClient
 import logging
 
-from ...supabase.deps import get_db, get_current_user
-from ...supabase.schemas import UserIn
-from ..schemas import Item, ItemCreate, ItemUpdate
+from src.supabase.deps import get_db, get_current_user
+from src.supabase.schemas import UserIn
+from src.item.schemas import Item, ItemCreate, ItemUpdate
+from src.item.crud import item_repository
 
 router = APIRouter(prefix="/items", tags=["items"])
 
@@ -25,16 +26,9 @@ async def create_item(
         data["user_id"] = current_user.id
         
         logging.info(f"Creating item with data: {data}")
-        response = await db.table("items").insert(data).execute()
-        logging.info(f"Got response: {response}")
-        
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not create item"
-            )
-            
-        return Item(**response.data[0])
+        item = await item_repository.create(db, obj_in=ItemCreate(**data))
+        logging.info(f"Created item: {item}")
+        return item
     except Exception as e:
         logging.error(f"Error creating item: {str(e)}")
         raise HTTPException(
@@ -53,8 +47,8 @@ async def read_items(
     Retrieve all items for the current user.
     """
     try:
-        response = await db.table("items").select("*").eq("user_id", current_user.id).execute()
-        return [Item(**item) for item in response.data]
+        items = await item_repository.get_multi_by_owner(db, user=current_user)
+        return list(items)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -73,15 +67,20 @@ async def read_item(
     Get a specific item by ID.
     """
     try:
-        response = await db.table("items").select("*").eq("id", item_id).eq("user_id", current_user.id).single().execute()
-        
-        if not response.data:
+        item = await item_repository.get(db, id=item_id)
+        if not item:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Item not found"
             )
             
-        return Item(**response.data)
+        if item.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not enough permissions"
+            )
+            
+        return item
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -102,23 +101,25 @@ async def update_item(
     """
     try:
         # Verify item belongs to user
-        existing = await db.table("items").select("*").eq("id", item_id).eq("user_id", current_user.id).single().execute()
-        
-        if not existing.data:
+        item = await item_repository.get(db, id=item_id)
+        if not item:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Item not found"
             )
         
-        response = await db.table("items").update(item_in.model_dump()).eq("id", item_id).execute()
-        
-        if not response.data:
+        if item.user_id != current_user.id:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not update item"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not enough permissions"
             )
-            
-        return Item(**response.data[0])
+        
+        # Set the ID in the update object
+        update_data = item_in.model_dump()
+        update_data["id"] = item_id
+        update_obj = ItemUpdate(**update_data)
+        
+        return await item_repository.update(db, obj_in=update_obj)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -138,23 +139,20 @@ async def delete_item(
     """
     try:
         # Verify item belongs to user
-        existing = await db.table("items").select("*").eq("id", item_id).eq("user_id", current_user.id).single().execute()
-        
-        if not existing.data:
+        item = await item_repository.get(db, id=item_id)
+        if not item:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Item not found"
             )
-        
-        response = await db.table("items").delete().eq("id", item_id).execute()
-        
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not delete item"
-            )
             
-        return Item(**response.data[0])
+        if item.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not enough permissions"
+            )
+        
+        return await item_repository.delete(db, id=item_id)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
