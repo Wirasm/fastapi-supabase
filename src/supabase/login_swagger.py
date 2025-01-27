@@ -85,7 +85,7 @@ async def get_test_token(credentials: HTTPBasicCredentials = Depends(security)):
         # Create UserIn instance with enhanced data
         user = UserIn(
             id=response.user.id,
-            email=response.user.email,
+            email=str(response.user.email) if response.user.email else "no-email@example.com",
             roles=response.user.user_metadata.get("roles", ["user"]) if response.user.user_metadata else ["user"],
             metadata=response.user.user_metadata or {},
             is_active=True
@@ -114,7 +114,7 @@ async def get_test_token(credentials: HTTPBasicCredentials = Depends(security)):
             status_code=400,
             detail=str(e)
         )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail="An unexpected error occurred"

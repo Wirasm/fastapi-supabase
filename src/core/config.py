@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "FastAPI Supabase Template"
     VERSION: str = "0.1.0"
+    DEBUG: bool = Field(default=True, description="Debug mode")
 
     # Supabase Settings
     SUPABASE_URL: str = Field(
@@ -43,6 +44,14 @@ class Settings(BaseSettings):
         default=None,
         description="Supabase Service Key"
     )
+    SUPABASE_JWT_SECRET: Optional[str] = Field(
+        default=None,
+        description="Supabase JWT Secret for token verification"
+    )
+    SUPABASE_TIMEOUT: int = Field(
+        default=10,
+        description="Supabase client timeout in seconds"
+    )
 
     # User Settings
     SUPERUSER_EMAIL: str = Field(
@@ -55,8 +64,22 @@ class Settings(BaseSettings):
     )
 
     # Server Settings
+    SERVER_NAME: str = Field(default="FastAPI Supabase Template")
     SERVER_HOST: AnyHttpUrl = Field(default=DEFAULT_SERVER_HOST)
-    SERVER_PORT: int = 8000
+    SERVER_PORT: int = Field(default=8000, description="Server port")
+    API_PREFIX: str = Field(default="/api", description="API prefix")
+    DOCS_URL: str = Field(default="/docs", description="Swagger UI URL")
+    REDOC_URL: str = Field(default="/redoc", description="ReDoc UI URL")
+
+    # Security Settings
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=60,
+        description="Access token expiration in minutes"
+    )
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(
+        default=7,
+        description="Refresh token expiration in days"
+    )
 
     # CORS Settings
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []

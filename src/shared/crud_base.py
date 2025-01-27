@@ -16,54 +16,46 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
 
     async def get(self, db: AsyncClient, *, id: str) -> ModelType | None:
         """get by table_name by id"""
-        data, count = (
-            await db.table(self.model.table_name).select("*").eq("id", id).execute()
-        )
-        _, got = data
-        return self.model(**got[0]) if got else None
+        response = await db.table(self.model.table_name).select("*").eq("id", id).execute()
+        return self.model(**response.data[0]) if response.data else None
 
     async def get_all(self, db: AsyncClient) -> list[ModelType]:
         """get all by table_name"""
-        data, count = await db.table(self.model.table_name).select("*").execute()
-        _, got = data
-        return [self.model(**item) for item in got]
+        response = await db.table(self.model.table_name).select("*").execute()
+        return [self.model(**item) for item in response.data]
 
     async def get_multi_by_owner(
         self, db: AsyncClient, *, user: UserIn
     ) -> list[ModelType]:
         """get by owner,use it  if rls failed to use"""
-        data, count = (
+        response = (
             await db.table(self.model.table_name)
             .select("*")
             .eq("user_id", user.id)
             .execute()
         )
-        _, got = data
-        return [self.model(**item) for item in got]
+        return [self.model(**item) for item in response.data]
 
     async def create(self, db: AsyncClient, *, obj_in: CreateSchemaType) -> ModelType:
         """create by CreateSchemaType"""
-        data, count = (
+        response = (
             await db.table(self.model.table_name).insert(obj_in.model_dump()).execute()
         )
-        _, created = data
-        return self.model(**created[0])
+        return self.model(**response.data[0])
 
     async def update(self, db: AsyncClient, *, obj_in: UpdateSchemaType) -> ModelType:
         """update by UpdateSchemaType"""
-        data, count = (
+        response = (
             await db.table(self.model.table_name)
-            .update(obj_in.model_dump())
+            .update(obj_in.model_dump(exclude={"id"}))
             .eq("id", obj_in.id)
             .execute()
         )
-        _, updated = data
-        return self.model(**updated[0])
+        return self.model(**response.data[0])
 
     async def delete(self, db: AsyncClient, *, id: str) -> ModelType:
         """remove by UpdateSchemaType"""
-        data, count = (
+        response = (
             await db.table(self.model.table_name).delete().eq("id", id).execute()
         )
-        _, deleted = data
-        return self.model(**deleted[0])
+        return self.model(**response.data[0])

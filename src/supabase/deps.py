@@ -1,9 +1,11 @@
 import logging
+from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Annotated, AsyncGenerator, Optional, List
+from typing import Optional, List, Protocol, Annotated
 
 from fastapi import Depends, HTTPException, Security
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import EmailStr
 
 from gotrue.errors import AuthApiError
 
@@ -13,117 +15,234 @@ from supabase.lib.client_options import AsyncClientOptions
 from ..core.config import settings
 from .schemas import UserIn
 
-# Change to HTTPBearer
-security = HTTPBearer(
-    scheme_name="Bearer Auth", description="Enter your Supabase JWT token"
-)
 
-super_client: Optional[AsyncClient] = None
+class ISupabaseClient(Protocol):
+    """Interface for Supabase client operations"""
+    async def table(self, name: str) -> AsyncClient: ...
+    async def auth(self) -> AsyncClient: ...
+
+
+class IAuthService(ABC):
+    """Interface for authentication service"""
+    @abstractmethod
+    async def get_current_user(self, token: str) -> UserIn:
+        """Get current authenticated user"""
+        pass
+
+    @abstractmethod
+    async def validate_roles(self, user: UserIn, roles: List[str]) -> None:
+        """Validate user roles"""
+        pass
+
+
+class SupabaseAuthService(IAuthService):
+    def __init__(self, client: AsyncClient):
+        self.client = client
+
+    async def get_current_user(self, token: str) -> UserIn:
+        try:
+            logging.info(f"Attempting to get user with token")
+            
+            # Get the user directly with the token
+            response = await self.client.auth.get_user(token)
+            logging.info(f"Got user response: {response}")
+            
+            if not response or not response.user:
+                logging.error("No user found in response")
+                raise AuthError("Invalid authentication credentials")
+
+            user_email = response.user.email
+            if not user_email:
+                logging.error("No email found in user data")
+                raise AuthError("User email is required")
+
+            return UserIn(
+                id=response.user.id,
+                email=user_email,  # EmailStr validation is handled by the Pydantic model
+                is_active=True,
+                roles=response.user.user_metadata.get("roles", []),
+                metadata=response.user.user_metadata
+            )
+        except AuthApiError as e:
+            logging.error(f"AuthApiError: {str(e)}")
+            raise AuthError(str(e))
+        except Exception as e:
+            logging.error(f"Unexpected error in get_current_user: {str(e)}")
+            raise AuthError(f"Authentication failed: {str(e)}")
+
+    async def validate_roles(self, user: UserIn, roles: List[str]) -> None:
+        if not any(role in user.roles for role in roles):
+            raise PermissionError("User does not have required roles")
+
 
 class UserRole(str, Enum):
     ADMIN = "admin"
     USER = "user"
     GUEST = "guest"
 
+
 class AuthError(HTTPException):
     def __init__(self, detail: str, headers: Optional[dict] = None):
         super().__init__(status_code=401, detail=detail, headers=headers or {"WWW-Authenticate": "Bearer"})
+
 
 class PermissionError(HTTPException):
     def __init__(self, detail: str):
         super().__init__(status_code=403, detail=detail)
 
+
+# Security scheme
+security = HTTPBearer(
+    scheme_name="Bearer Auth",
+    description="Enter your JWT token",
+    auto_error=True,
+    bearerFormat="JWT"
+)
+
+# Global client instance
+super_client: Optional[AsyncClient] = None
+
+
 async def init_super_client() -> None:
-    """for validation access_token init at life span event"""
+    """Initialize Supabase client at lifespan event"""
     global super_client
-    super_client = await create_client(
-        settings.SUPABASE_URL,
-        settings.SUPABASE_KEY,
-        options=AsyncClientOptions(
-            postgrest_client_timeout=10, storage_client_timeout=10
-        ),
-    )
-
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Security(security)) -> UserIn:
-    """
-    Validate JWT token and return current user with enhanced security checks
-    """
-    if not super_client:
-        raise HTTPException(status_code=500, detail="Super client not initialized")
-
     try:
-        token = credentials.credentials
-        if token.startswith("Bearer "):
-            token = token[7:]
-
-        # Validate token and get user
-        user_rsp = await super_client.auth.get_user(jwt=token)
-        
-        if not user_rsp or not user_rsp.user:
-            raise AuthError("Invalid authentication credentials")
-
-        # Extract user metadata and roles
-        user_data = user_rsp.user
-        user_metadata = user_data.user_metadata or {}
-        roles = user_metadata.get("roles", ["user"])
-
-        # Create UserIn instance with enhanced data
-        return UserIn(
-            id=user_data.id,
-            email=user_data.email,
-            roles=roles,
-            metadata=user_metadata
+        options = AsyncClientOptions(
+            postgrest_client_timeout=settings.SUPABASE_TIMEOUT,
+            storage_client_timeout=settings.SUPABASE_TIMEOUT,
+            auto_refresh_token=True,
+            persist_session=True
         )
-
-    except AuthApiError as e:
-        if "expired" in str(e).lower():
-            raise AuthError("Token has expired")
-        raise AuthError(f"Authentication failed: {str(e)}")
-    except Exception as e:
-        logging.error(f"Authentication error: {str(e)}")
-        raise AuthError("Authentication failed")
-
-async def require_roles(user: UserIn, required_roles: List[UserRole]) -> None:
-    """
-    Validate user has required roles
-    """
-    user_roles = set(user.roles)
-    required = set(required_roles)
-    
-    if not (user_roles & required):
-        raise PermissionError(f"User does not have required roles: {required}")
-
-# Role-based dependency
-def has_roles(*roles: UserRole):
-    async def role_checker(user: UserIn = Depends(get_current_user)):
-        await require_roles(user, roles)
-        return user
-    return role_checker
-
-# Enhanced database session with user context
-async def get_db(user: UserIn = Depends(get_current_user)) -> AsyncGenerator[AsyncClient, None]:
-    """
-    Get database session with user context and enhanced error handling
-    """
-    try:
-        client = await create_client(
+        
+        super_client = await create_client(
             settings.SUPABASE_URL,
             settings.SUPABASE_KEY,
-            options=AsyncClientOptions(
-                postgrest_client_timeout=10,
-                storage_client_timeout=10,
-                headers={
-                    "X-User-Id": user.id,
-                    "X-User-Email": user.email
-                }
-            ),
+            options=options
         )
-        yield client
+        logging.info("Supabase client initialized successfully")
     except Exception as e:
-        logging.error(f"Database session error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database connection failed")
+        logging.error(f"Failed to initialize Supabase client: {e}")
+        raise
 
-CurrentUser = Annotated[UserIn, Depends(get_current_user)]
 
-SessionDep = Annotated[AsyncClient, Depends(get_db)]
+def get_auth_service() -> IAuthService:
+    """Get authentication service instance"""
+    if not super_client:
+        raise HTTPException(
+            status_code=500,
+            detail="Authentication service not initialized"
+        )
+    return SupabaseAuthService(super_client)
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Security(security)
+) -> UserIn:
+    """Get current user from token.
+    
+    Args:
+        credentials: The HTTP Authorization credentials containing the JWT token
+        
+    Returns:
+        UserIn: The current user
+        
+    Raises:
+        HTTPException: If token is invalid or user not found
+    """
+    try:
+        if not super_client:
+            logging.error("Database connection not initialized")
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not initialized"
+            )
+        
+        logging.info(f"Validating token: {credentials.credentials}")
+        
+        # Get user data directly from the token
+        user = await super_client.auth.get_user(credentials.credentials)
+        logging.info(f"Got user: {user}")
+        
+        if not user or not user.user:
+            logging.error("No user found in session")
+            raise HTTPException(
+                status_code=401,
+                detail="Could not validate credentials"
+            )
+        
+        user_data = {
+            "id": user.user.id,
+            "email": user.user.email,
+            "is_superuser": user.user.user_metadata.get("is_superuser", False),
+            "roles": user.user.user_metadata.get("roles", [])
+        }
+        logging.info(f"User data: {user_data}")
+        
+        return UserIn(**user_data)
+        
+    except Exception as e:
+        logging.error(f"Error getting current user: {str(e)}")
+        raise HTTPException(
+            status_code=401,
+            detail=str(e)
+        )
+
+
+async def get_db(
+    credentials: HTTPAuthorizationCredentials = Security(security)
+) -> AsyncClient:
+    """Get database client instance with authenticated session.
+    
+    Args:
+        credentials: The HTTP Authorization credentials containing the JWT token
+        
+    Returns:
+        AsyncClient: The Supabase client instance with authenticated session
+        
+    Raises:
+        HTTPException: If database connection is not initialized
+    """
+    try:
+        if not super_client:
+            logging.error("Database connection not initialized")
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not initialized"
+            )
+        
+        # Set auth headers for database operations
+        super_client.postgrest.auth(credentials.credentials)
+        return super_client
+        
+    except Exception as e:
+        logging.error(f"Error setting up database client: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+def has_roles(*roles: UserRole):
+    """Role-based authorization dependency.
+    
+    Args:
+        roles: Variable number of UserRole enums representing required roles
+        
+    Returns:
+        Callable: An async function that checks if the user has any of the required roles
+        
+    Raises:
+        PermissionError: If user lacks the required roles
+    """
+    async def role_checker(
+        user: UserIn = Depends(get_current_user),
+        auth_service: IAuthService = Depends(get_auth_service)
+    ):
+        try:
+            await auth_service.validate_roles(user, [role.value for role in roles])
+            logging.info(f"User {user.email} authorized with roles: {[role.value for role in roles]}")
+            return user
+        except Exception as e:
+            logging.error(f"Role validation failed for user {user.email}: {str(e)}")
+            raise
+    return role_checker

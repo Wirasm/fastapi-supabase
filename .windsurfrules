@@ -13,7 +13,7 @@ A template for FastAPI projects using Supabase, implementing SOLID principles, d
 - Python 3.12+
 - FastAPI
 - Pydantic v2
-- UV (Package Manager)
+- UV (Package Manager) ALWAYS USE "UV ADD <package>" in the terminal when adding a new package
 - Uvicorn (ASGI Server)
 - Supabase (Database, Auth, Storage)
 - `supabase-py` (Supabase Python Client)

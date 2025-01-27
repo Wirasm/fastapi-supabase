@@ -1,17 +1,16 @@
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, EmailStr
-from gotrue import UserAttributes
 
 
 class Token(BaseModel):
     """OAuth2 compatible token response"""
     access_token: str
     token_type: str = "bearer"
-    expires_in: int
+    expires_in: Optional[int] = 3600  # Default 1 hour
     refresh_token: Optional[str] = None
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
                 "token_type": "bearer",
@@ -19,6 +18,7 @@ class Token(BaseModel):
                 "refresh_token": "optional-refresh-token"
             }
         }
+    }
 
 
 class UserBase(BaseModel):
@@ -49,40 +49,42 @@ class UserCreate(UserBase):
     """Properties to receive via API on creation"""
     password: str
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "email": "user@example.com",
-                "password": "strongpassword123",
+                "password": "strongpassword",
                 "roles": ["user"],
                 "metadata": {"full_name": "John Doe"}
             }
         }
+    }
 
 
-class UserUpdate(UserAttributes):
+class UserUpdate(BaseModel):
     """Properties to receive via API on update"""
     email: Optional[EmailStr] = None
     password: Optional[str] = None
     roles: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "email": "newemail@example.com",
                 "roles": ["user", "admin"],
                 "metadata": {"full_name": "John Doe Updated"}
             }
         }
+    }
 
 
 class TokenResponse(Token):
     """Complete token response with user data"""
     user: UserIn
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
                 "token_type": "bearer",
@@ -97,3 +99,4 @@ class TokenResponse(Token):
                 }
             }
         }
+    }
